@@ -105,13 +105,11 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 	page := s.page.Context(ctx).Timeout(60 * time.Second)
 
 	searchURL := makeSearchURL(keyword)
-	// 导航和 load 事件分别限时：搜索页 HTML 偶尔会被站点拖住几十秒不返回，
-	// 与其把整个 60 秒 deadline 耗在这里，不如尽快失败让调用方重试或跳过。
-	if err := page.Timeout(25 * time.Second).Navigate(searchURL); err != nil {
+	// 正常情况下导航不到 1 秒就返回；站点偶尔会把 search_result 的 HTML 拖住几十秒。
+	// 这里限 12 秒、原地重试一次，再不行才报错让调用方处理。
+	// 不等 load 事件：结果是页面挂载后再请求的，直接等它注水即可，load 迟迟不来时也不白等。
+	if err := navigateWithRetry(page, searchURL, 12*time.Second); err != nil {
 		return nil, fmt.Errorf("打开搜索页失败: %w", err)
-	}
-	if err := page.Timeout(20 * time.Second).WaitLoad(); err != nil {
-		logrus.Warnf("搜索页 load 事件超时，继续等结果注水: %v", err)
 	}
 	waitFeedsLoaded(page, 20*time.Second)
 	humanize.Delay(ctx, humanize.AfterNavigate)
@@ -283,4 +281,16 @@ func makeSearchURL(keyword string) string {
 	//https://www.xiaohongshu.com/search_result?keyword=%25E7%258E%258B%25E5%25AD%2590&source=web_search_result_notes
 	//https://www.xiaohongshu.com/search_result?keyword=%25E7%258E%258B%25E5%25AD%2590&source=web_explore_feed
 	return fmt.Sprintf("https://www.xiaohongshu.com/search_result?%s", values.Encode())
+}
+
+// navigateWithRetry 带上限的导航，超时立即重试一次（站点拖住 HTML 时第二次通常很快）。
+func navigateWithRetry(page *rod.Page, url string, timeout time.Duration) error {
+	var err error
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err = page.Timeout(timeout).Navigate(url); err == nil {
+			return nil
+		}
+		logrus.Warnf("导航 %s 超时（第 %d 次，%s）: %v", url, attempt, timeout, err)
+	}
+	return err
 }

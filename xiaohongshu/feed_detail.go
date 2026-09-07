@@ -108,9 +108,9 @@ func (f *FeedDetailAction) GetFeedDetailWithConfig(ctx context.Context, feedID, 
 	// 使用retry-go处理页面导航和DOM稳定等待
 	err := retry.Do(
 		func() error {
-			page.MustNavigate(url)
-			page.MustWaitLoad()
-			return nil
+			// 导航限 12 秒（站点拖住时不至于吃满整页 10 分钟的 deadline）；
+			// 不等 load 事件，后面直接等 noteDetailMap 注水。
+			return page.Timeout(12 * time.Second).Navigate(url)
 		},
 		retry.Attempts(3),
 		retry.Delay(500*time.Millisecond),
