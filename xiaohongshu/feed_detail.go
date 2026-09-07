@@ -109,7 +109,7 @@ func (f *FeedDetailAction) GetFeedDetailWithConfig(ctx context.Context, feedID, 
 	err := retry.Do(
 		func() error {
 			page.MustNavigate(url)
-			page.MustWaitDOMStable()
+			page.MustWaitLoad()
 			return nil
 		},
 		retry.Attempts(3),
@@ -123,10 +123,16 @@ func (f *FeedDetailAction) GetFeedDetailWithConfig(ctx context.Context, feedID, 
 		logrus.Errorf("页面导航失败: %v", err)
 		return nil, err
 	}
+	// 等这篇笔记的数据注水进 __INITIAL_STATE__.note.noteDetailMap，而不是等 DOM 静止：
+	// 详情页评论区和图片懒加载让 DOM 迟迟不静止，rod 的 WaitDOMStable 至少白等 1 秒、常常 2–3 秒。
+	loaded := waitNoteDetailLoaded(page, feedID, 15*time.Second)
 	humanize.Delay(ctx, humanize.AfterNavigate)
 
-	if err := checkPageAccessible(page); err != nil {
-		return nil, err
+	// 数据到了就不用再花 500ms+ 找错误提示容器；没到才去看是不是被删 / 私密 / 需登录。
+	if !loaded {
+		if err := checkPageAccessible(page); err != nil {
+			return nil, err
+		}
 	}
 
 	if loadAllComments {
@@ -1002,4 +1008,36 @@ func (f *FeedDetailAction) extractFeedDetail(page *rod.Page, feedID string) (*Fe
 
 func makeFeedDetailURL(feedID, xsecToken string) string {
 	return fmt.Sprintf("https://www.xiaohongshu.com/explore/%s?xsec_token=%s&xsec_source=pc_feed", feedID, xsecToken)
+}
+
+// waitNoteDetailLoaded 轮询直到 noteDetailMap[feedID].note 出现（首屏笔记数据），
+// 然后再给首屏评论最多 4 秒到位（评论是挂载后异步请求的；没有评论的笔记不等）。
+// 超时不报错：交给后面的 checkPageAccessible / extractFeedDetail 给出具体原因。
+func waitNoteDetailLoaded(page *rod.Page, feedID string, timeout time.Duration) bool {
+	const noteJS = `(id) => {
+		const m = window.__INITIAL_STATE__ && window.__INITIAL_STATE__.note && window.__INITIAL_STATE__.note.noteDetailMap;
+		return !!(m && m[id] && m[id].note && m[id].note.noteId);
+	}`
+	const commentsJS = `(id) => {
+		const d = window.__INITIAL_STATE__.note.noteDetailMap[id];
+		const list = d.comments && d.comments.list;
+		const count = String((d.note.interactInfo && d.note.interactInfo.commentCount) || "0");
+		return (list && list.length > 0) || count === "0" || count === "";
+	}`
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if res, err := page.Eval(noteJS, feedID); err == nil && res.Value.Bool() {
+			commentDeadline := time.Now().Add(4 * time.Second)
+			for time.Now().Before(commentDeadline) {
+				if r2, err := page.Eval(commentsJS, feedID); err == nil && r2.Value.Bool() {
+					return true
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	logrus.Warnf("等待笔记 %s 数据加载超时（%s）", feedID, timeout)
+	return false
 }
