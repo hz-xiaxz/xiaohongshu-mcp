@@ -105,8 +105,14 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 	page := s.page.Context(ctx).Timeout(60 * time.Second)
 
 	searchURL := makeSearchURL(keyword)
-	page.MustNavigate(searchURL)
-	page.MustWaitLoad()
+	// 导航和 load 事件分别限时：搜索页 HTML 偶尔会被站点拖住几十秒不返回，
+	// 与其把整个 60 秒 deadline 耗在这里，不如尽快失败让调用方重试或跳过。
+	if err := page.Timeout(25 * time.Second).Navigate(searchURL); err != nil {
+		return nil, fmt.Errorf("打开搜索页失败: %w", err)
+	}
+	if err := page.Timeout(20 * time.Second).WaitLoad(); err != nil {
+		logrus.Warnf("搜索页 load 事件超时，继续等结果注水: %v", err)
+	}
 	waitFeedsLoaded(page, 20*time.Second)
 	humanize.Delay(ctx, humanize.AfterNavigate)
 
