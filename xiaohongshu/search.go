@@ -118,7 +118,11 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 	responses, stop := watchSearchResponses(page, keyword)
 	defer stop()
 	searchURL := makeSearchURL(keyword)
-	page.MustNavigate(searchURL)
+	// 导航单独限时：搜索页 HTML 偶尔会被站点拖住几十秒不返回，
+	// 与其把整个 60 秒 deadline 耗在这里，不如尽快失败让调用方重试或跳过。
+	if err := page.Timeout(25 * time.Second).Navigate(searchURL); err != nil {
+		return nil, fmt.Errorf("打开搜索页失败: %w", err)
+	}
 	if err := waitSearchReady(page, keyword, responses); err != nil {
 		return nil, fmt.Errorf("等待搜索结果失败: %w", err)
 	}
