@@ -187,6 +187,9 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 	}`).String()
 
 	if result == "" {
+		if err := checkSecurityVerification(page); err != nil {
+			return nil, err
+		}
 		return nil, errors.ErrNoFeeds
 	}
 

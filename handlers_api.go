@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/xpzouying/xiaohongshu-mcp/cookies"
+	apperrors "github.com/xpzouying/xiaohongshu-mcp/errors"
 	"github.com/xpzouying/xiaohongshu-mcp/xiaohongshu"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +30,18 @@ func respondError(c *gin.Context, statusCode int, code, message string, details 
 	}
 
 	c.JSON(statusCode, response)
+}
+
+// respondPageError 返回页面操作失败的响应。
+// 触发安全验证单独给 403 + SECURITY_VERIFICATION_REQUIRED：调用方要停下来让人完成验证，
+// 而不是当成普通的 500 去重试。
+func respondPageError(c *gin.Context, code, message string, err error) {
+	if errors.Is(err, apperrors.ErrSecurityVerification) {
+		respondError(c, http.StatusForbidden, "SECURITY_VERIFICATION_REQUIRED",
+			"页面被风控拦截", err.Error())
+		return
+	}
+	respondError(c, http.StatusInternalServerError, code, message, err.Error())
 }
 
 // respondSuccess 返回成功响应
@@ -126,8 +140,8 @@ func (s *AppServer) publishVideoHandler(c *gin.Context) {
 func (s *AppServer) listFeedsHandler(c *gin.Context) {
 	result, err := s.xiaohongshuService.ListFeeds(c.Request.Context())
 	if err != nil {
-		respondError(c, http.StatusInternalServerError, "LIST_FEEDS_FAILED",
-			"获取Feeds列表失败", err.Error())
+		respondPageError(c, "LIST_FEEDS_FAILED",
+			"获取Feeds列表失败", err)
 		return
 	}
 
@@ -162,8 +176,8 @@ func (s *AppServer) searchFeedsHandler(c *gin.Context) {
 
 	result, err := s.xiaohongshuService.SearchFeeds(c.Request.Context(), keyword, filters)
 	if err != nil {
-		respondError(c, http.StatusInternalServerError, "SEARCH_FEEDS_FAILED",
-			"搜索Feeds失败", err.Error())
+		respondPageError(c, "SEARCH_FEEDS_FAILED",
+			"搜索Feeds失败", err)
 		return
 	}
 
@@ -195,8 +209,8 @@ func (s *AppServer) getFeedDetailHandler(c *gin.Context) {
 	}
 
 	if err != nil {
-		respondError(c, http.StatusInternalServerError, "GET_FEED_DETAIL_FAILED",
-			"获取Feed详情失败", err.Error())
+		respondPageError(c, "GET_FEED_DETAIL_FAILED",
+			"获取Feed详情失败", err)
 		return
 	}
 

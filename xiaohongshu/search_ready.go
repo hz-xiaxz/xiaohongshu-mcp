@@ -172,6 +172,10 @@ func waitSearchReady(page *rod.Page, keyword string, responses <-chan searchResp
 		if state.Value.Get("failed").Bool() && response.err != nil {
 			return response.err
 		}
+		// 被重定向到安全验证页后数据永远不会来，别白等到 60 秒 deadline。
+		if err := checkSecurityVerification(page); err != nil {
+			return err
+		}
 		select {
 		case <-page.GetContext().Done():
 			return page.GetContext().Err()
