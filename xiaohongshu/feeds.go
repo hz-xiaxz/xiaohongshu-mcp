@@ -50,6 +50,9 @@ func (f *FeedsListAction) GetFeedsList(ctx context.Context) ([]Feed, error) {
 		if result = readFeeds(); result != "" || time.Now().After(deadline) {
 			break
 		}
+		if err := checkSecurityVerification(page); err != nil {
+			return nil, err
+		}
 		time.Sleep(300 * time.Millisecond)
 	}
 

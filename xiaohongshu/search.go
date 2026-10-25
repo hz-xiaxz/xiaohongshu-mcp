@@ -121,7 +121,9 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 	if err := navigateWithRetry(page, searchURL, 12*time.Second); err != nil {
 		return nil, fmt.Errorf("打开搜索页失败: %w", err)
 	}
-	waitFeedsLoaded(page, 20*time.Second)
+	if err := waitFeedsLoaded(page, 20*time.Second); err != nil {
+		return nil, err
+	}
 	humanize.Delay(ctx, humanize.AfterNavigate)
 
 	if len(pending) > 0 {
@@ -181,6 +183,9 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 	}`).String()
 
 	if result == "" {
+		if err := checkSecurityVerification(page); err != nil {
+			return nil, err
+		}
 		return nil, errors.ErrNoFeeds
 	}
 
@@ -216,15 +221,20 @@ func readFeedIDs(page *rod.Page) string {
 // 条件立刻为真，于是读到上一页的 feeds——和下面 waitFeedsChanged 记的是同一个坑。
 //
 // 超时不报错：把判定交给后面统一的 ErrNoFeeds，与 feeds.go 里等注水的做法一致。
-func waitFeedsLoaded(page *rod.Page, timeout time.Duration) {
+// 唯一例外是页面被重定向到安全验证页：那时数据永远不会来，立即返回 ErrSecurityVerification。
+func waitFeedsLoaded(page *rod.Page, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if readFeedIDs(page) != "" {
-			return
+			return nil
+		}
+		if err := checkSecurityVerification(page); err != nil {
+			return err
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
 	logrus.Warnf("等待搜索结果加载超时（%s）", timeout)
+	return nil
 }
 
 // waitFeedsChanged 等筛选后的数据到位。
